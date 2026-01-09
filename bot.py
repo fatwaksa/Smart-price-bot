@@ -4,10 +4,10 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from telegram.error import TelegramError
 
-from config import TELEGRAM_TOKEN, GROQ_API_KEY  # تأكد من وضعهم كـ Environment Variables
-from scraper import scrape_prices  # Scraper مختصر فقط (name, price, link, rating)
+from config import TELEGRAM_TOKEN, GROQ_API_KEY
+from scraper import scrape_prices
 from scoring import score_offer
-from ai_engine import analyze  # تحليل AI مختصر للعروض الأفضل
+from ai_engine import analyze
 
 # رسالة ترحيب مميزة
 WELCOME_MESSAGE = """
@@ -20,8 +20,7 @@ WELCOME_MESSAGE = """
 @social2
 """
 
-# عدد العروض القصوى للمعالجة لتجنب الإفراط
-MAX_OFFERS = 20
+MAX_OFFERS = 20  # أقصى عدد عروض للمعالجة
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or "صديقي"
@@ -31,18 +30,14 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product = update.message.text.strip()
     user_name = update.effective_user.first_name or "صديقي"
 
-    # رسالة أولية
     msg = await update.message.reply_text(f"🔍 {user_name}، جاري تحليل السوق للمنتج: {product} ...")
 
-    # استخدام ThreadPoolExecutor للعمليات الحظرية
+    loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=5) as executor:
-        loop = asyncio.get_running_loop()
-
-        # 1️⃣ جلب العروض بشكل مختصر (Async + Timeout)
+        # 1️⃣ جلب العروض
         try:
-            future = loop.run_in_executor(executor, scrape_prices, product)
-            offers = await asyncio.wait_for(future, timeout=15.0)
-            offers = offers[:MAX_OFFERS]  # حد العروض لتجنب التأخير
+            offers = await asyncio.wait_for(loop.run_in_executor(executor, scrape_prices, product), timeout=15)
+            offers = offers[:MAX_OFFERS]
         except asyncio.TimeoutError:
             await safe_edit_text(msg, "⚠️ عذرًا، استغرق تحليل السوق وقتًا طويلاً. حاول مرة أخرى.")
             return
@@ -54,29 +49,27 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit_text(msg, "⚠️ لم يتم العثور على أي عروض لهذا المنتج.")
             return
 
-        # 2️⃣ تقييم العروض بشكل متوازي مع تحديث التقدم
+        # 2️⃣ تقييم العروض
         await safe_edit_text(msg, f"📝 جاري تقييم {len(offers)} عرض ...")
         scored = []
-        tasks = []
 
-        for o in offers:
-            tasks.append(loop.run_in_executor(executor, score_offer, o))
+        tasks = [loop.run_in_executor(executor, score_offer, o) for o in offers]
 
         for idx, task in enumerate(asyncio.as_completed(tasks)):
             try:
-                s = await asyncio.wait_for(task, timeout=5.0)  # timeout لكل تقييم
-            except asyncio.TimeoutError:
-                s = {"score": 0, "offer": offers[idx]}
-            except Exception as e:
+                s = await asyncio.wait_for(task, timeout=5.0)
+                # تأكد من شكل dict الصحيح
+                if not isinstance(s, dict) or "score" not in s or "offer" not in s:
+                    s = {"score": s if isinstance(s, (int, float)) else 0, "offer": offers[idx]}
+            except Exception:
                 s = {"score": 0, "offer": offers[idx]}
             scored.append(s)
-            if idx % 5 == 0 or idx == len(offers) - 1:  # تحديث كل 5 أو في النهاية لتجنب rate limit
+            if idx % 5 == 0 or idx == len(offers) - 1:
                 await safe_edit_text(msg, f"📝 تقييم {idx+1}/{len(offers)} عرض ...")
 
-        # ترتيب العروض حسب الدرجة
         scored = sorted(scored, key=lambda x: x.get("score", 0), reverse=True)
 
-        # 3️⃣ تحليل الذكاء الاصطناعي للعروض الثلاثة الأولى
+        # 3️⃣ تحليل AI للعروض الثلاثة الأعلى
         await safe_edit_text(msg, "🤖 تحليل الذكاء الاصطناعي للعروض الأفضل ...")
         try:
             future = loop.run_in_executor(executor, analyze, product, scored[:3])
@@ -90,12 +83,11 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_text(msg, ai_reply)
 
 async def safe_edit_text(msg, text):
-    """تحرير الرسالة بأمان مع التعامل مع الأخطاء"""
     try:
         await msg.edit_text(text)
     except TelegramError as e:
         if "Message is not modified" in str(e):
-            pass  # تجاهل إذا لم يتغير النص
+            pass
         else:
             print(f"Error editing message: {e}")
 
