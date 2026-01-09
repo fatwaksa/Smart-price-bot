@@ -1,33 +1,31 @@
-from groq import Groq
-from config import GROQ_API_KEY
+import os
+import requests
 
-client = Groq(api_key=GROQ_API_KEY)
-
-SYSTEM_PROMPT = """
-أنت خبير مشتريات عالمي.
-حلل البيانات فقط.
-لا تفترض.
-لا تسوّق.
-قدّم توصية منطقية.
-"""
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_MODEL = "llama3-13b"  # استخدم موديل مدعوم حاليًا
 
 def analyze(product, offers):
-    content = f"""
-المنتج: {product}
+    """
+    تحليل الذكاء الاصطناعي للعروض الأفضل باستخدام Groq API
+    """
+    prompt = f"Product: {product}\nOffers: {offers}\nPlease summarize and recommend the best option clearly."
 
-العروض:
-{offers}
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
-حلل وقدّم أفضل خيار.
-"""
+    data = {
+        "model": GROQ_MODEL,
+        "prompt": prompt,
+        "max_output_tokens": 400,
+        "temperature": 0.2
+    }
 
-    response = client.chat.completions.create(
-        model="llama3-70b-8192",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content}
-        ],
-        temperature=0.2
-    )
-
-    return response.choices[0].message.content
+    response = requests.post("https://api.groq.com/v1/completions", json=data, headers=headers)
+    
+    if response.status_code != 200:
+        raise Exception(f"Groq API Error: {response.status_code} - {response.text}")
+    
+    result = response.json()
+    return result['completion']  # حسب شكل الاستجابة الجديد من Groq
