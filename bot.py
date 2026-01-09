@@ -1,87 +1,77 @@
 import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from config import TELEGRAM_TOKEN, GROQ_API_KEY
-from scraper import scrape_prices
+
+from config import TELEGRAM_TOKEN, GROQ_API_KEY  # تأكد من وضعهم كـ Environment Variables
+from scraper import scrape_prices  # Scraper مختصر فقط (name, price, link, rating)
 from scoring import score_offer
-from ai_engine import analyze
-from functools import lru_cache
-import time
+from ai_engine import analyze  # تحليل AI مختصر للعروض الأفضل
 
-# ==============================
-# رسائل ترحيب محسنة
-# ==============================
+# رسالة ترحيب مميزة
 WELCOME_MESSAGE = """
-👋 أهلاً بك {user} في منصة عزو لتحليل السوق!
+👋 أهلاً بك #user في منصة عزو لتحليل السوق!
 
-ضع اسم المنتج أو الخدمة التي تريد البحث عنها، وسأوفر لك أفضل الأسعار الموثوقة والمناسبة.
+ضع اسم المنتج الذي تريد البحث عنه، وسأساعدك باختيار أفضل عرض موثوق وبأفضل سعر ممكن.
 
-💡 يمكنك الاعتماد علينا لتحليل سريع ودقيق، ومقارنة الأسعار بين المتاجر العالمية والمحلية.
-
-تابعنا على حساباتنا:
-@YourTwitter
-@YourInstagram
+💡 حساباتنا على التواصل الاجتماعي:
+@social1
+@social2
 """
 
-# ==============================
-# Caching للعروض لتسريع البوت
-# ==============================
-@lru_cache(maxsize=128)
-def cached_scrape(product: str):
-    return scrape_prices(product)
-
-# ==============================
-# أمر البداية
-# ==============================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or "صديقي"
-    await update.message.reply_text(WELCOME_MESSAGE.format(user=user_name))
+    await update.message.reply_text(WELCOME_MESSAGE.replace("#user", user_name))
 
-# ==============================
-# التعامل مع أي رسالة
-# ==============================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product = update.message.text.strip()
     user_name = update.effective_user.first_name or "صديقي"
 
-    await update.message.reply_text(f"🔍 {user_name}، جاري تحليل السوق للمنتج: {product} ...")
+    # رسالة أولية
+    msg = await update.message.reply_text(f"🔍 {user_name}، جاري تحليل السوق للمنتج: {product} ...")
 
     loop = asyncio.get_event_loop()
 
-    # 1️⃣ جلب العروض بشكل async مع timeout
+    # 1️⃣ جلب العروض بشكل مختصر (Async + Timeout)
     try:
-        offers = await asyncio.wait_for(loop.run_in_executor(None, cached_scrape, product), timeout=15)
+        offers = await asyncio.wait_for(loop.run_in_executor(None, scrape_prices, product), timeout=15)
     except asyncio.TimeoutError:
-        await update.message.reply_text("⚠️ عذرًا، استغرق تحليل السوق وقتًا طويلاً. حاول مرة أخرى.")
+        await msg.edit_text("⚠️ عذرًا، استغرق تحليل السوق وقتًا طويلاً. حاول مرة أخرى.")
         return
 
     if not offers:
-        await update.message.reply_text("⚠️ لم يتم العثور على أي عروض لهذا المنتج.")
+        await msg.edit_text("⚠️ لم يتم العثور على أي عروض لهذا المنتج.")
         return
 
-    # 2️⃣ حساب الدرجات لكل عرض بشكل async
-    await update.message.reply_text(f"📝 تقييم {len(offers)} عرضًا ...")
-    scored = await asyncio.gather(*[loop.run_in_executor(None, score_offer, o) for o in offers])
+    # 2️⃣ تقييم العروض تدريجيًا
+    scored = []
+    for idx, o in enumerate(offers):
+        try:
+            s = await loop.run_in_executor(None, score_offer, o)
+        except Exception as e:
+            s = {"score": 0, "offer": o}
+        scored.append(s)
+        await msg.edit_text(f"📝 تقييم {idx+1}/{len(offers)} عرض ...")
+
+    # ترتيب العروض حسب الدرجة
     scored = sorted(scored, key=lambda x: x["score"], reverse=True)
 
-    # 3️⃣ تحليل Groq AI للعروض الثلاثة الأفضل
-    await update.message.reply_text("🤖 تحليل الذكاء الاصطناعي للعروض الأفضل ...")
+    # 3️⃣ تحليل الذكاء الاصطناعي للعروض الثلاثة الأولى
+    await msg.edit_text("🤖 تحليل الذكاء الاصطناعي للعروض الأفضل ...")
     try:
         ai_reply = await asyncio.wait_for(loop.run_in_executor(None, analyze, product, scored[:3]), timeout=10)
     except asyncio.TimeoutError:
-        ai_reply = "⚠️ حدثت مشكلة أثناء تحليل الذكاء الاصطناعي. يمكن تجربة إعادة البحث."
+        ai_reply = "⚠️ حدثت مشكلة أثناء تحليل الذكاء الاصطناعي. يرجى إعادة المحاولة."
+    except Exception as e:
+        ai_reply = f"⚠️ خطأ أثناء تحليل AI: {str(e)}"
 
-    # 4️⃣ إرسال الرد النهائي
-    await update.message.reply_text(ai_reply)
+    # 4️⃣ عرض النتيجة النهائية
+    await msg.edit_text(ai_reply)
 
-# ==============================
-# تشغيل البوت
-# ==============================
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
-    print("✅ Bot is running...")
+    print("Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
