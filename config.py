@@ -1,3 +1,7 @@
-# config.py
-TELEGRAM_TOKEN = "6135222474:AAGIHe4cRdiS_YNZCY7uTawu_5-xb28Vj0Y"
-OPENAI_API_KEY = "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"
+import os
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+if not TELEGRAM_TOKEN or not GROQ_API_KEY:
+    raise RuntimeError("❌ Missing environment variables")
